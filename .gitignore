@@ -1,0 +1,8 @@
+node_modules/
+.npm-cache/
+.ocr/
+outputs/
+supabase/setup.sql
+dist/
+.env
+.env.local
