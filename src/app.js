@@ -6,7 +6,7 @@ const url = import.meta.env.VITE_SUPABASE_URL;
 const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 const db = url && key ? createClient(url, key) : null;
 const root = document.querySelector('#app');
-let demo = false, students = [], selected = null, search = '', filter = '', session = null;
+let demo = false, students = [], selected = null, activeGroup = null, search = '', filter = '', session = null;
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const badge = value => `<span class="badge ${value === 'Vigente' ? 'green' : value === 'Vencido' ? 'red' : value === 'Próximo a vencer' ? 'amber' : 'gray'}">${value}</span>`;
@@ -61,6 +61,7 @@ async function load() {
   }
   students = rows;
   if (selected && !students.some(student => String(student.id) === String(selected))) selected = null;
+  if (activeGroup && !students.some(student => student.group_name === activeGroup)) activeGroup = null;
   render();
 }
 
@@ -68,12 +69,18 @@ function render() {
   students.sort((a, b) => a.group_name.localeCompare(b.group_name, 'es') || a.list_number - b.list_number || a.full_name.localeCompare(b.full_name, 'es'));
   const labels = ['Sin confirmar', 'No tiene', 'Vigente', 'Próximo a vencer', 'Vencido', 'Revisar'];
   const counts = Object.fromEntries(labels.map(label => [label, students.filter(student => status(student) === label).length]));
-  root.innerHTML = `${header()}<main><div class="heading"><div><div class="eyebrow">SECRETARÍA / ESTUDIANTES</div><h1>Carné del adolescente</h1><p>Estado y vencimiento de los ${students.length} estudiantes registrados.</p></div><button id="new-student">+ Estudiante</button></div>${demo ? '<div class="notice">Los cambios de esta demostración se pierden al salir o recargar. No ingreses datos reales.</div>' : ''}<div class="stats">${Object.entries(counts).filter(([, count]) => count || students.length === 0).map(([label, count]) => `<div class="card"><span>${label}</span><strong>${count}</strong><small>estudiantes</small></div>`).join('')}</div><section class="card workspace"><div class="section-head"><h2>Estudiantes <span class="count">${students.length}</span></h2><p class="muted">Selecciona uno para consultar o actualizar su carné.</p></div><div class="toolbar"><label class="search">Buscar<input id="search" type="search" placeholder="Nombre, cédula o grupo…" value="${escape(search)}"></label><label>Estado<select id="filter"><option value="">Todos</option>${labels.map(label => `<option ${filter === label ? 'selected' : ''}>${label}</option>`).join('')}</select></label><button id="refresh" class="secondary">Actualizar</button></div><div class="columns"><div id="students"></div><div id="detail"></div></div></section><p id="message" class="message" role="status" aria-live="polite"></p><footer>Próximo a vencer: el carné vence durante los siguientes 30 días. La fecha registrada representa mes y año.</footer></main><dialog id="modal"></dialog>`;
+  const groups = [...new Set(students.map(student => student.group_name))];
+  const groupsView = `<section class="card workspace"><div class="section-head"><h2>Grupos <span class="count">${groups.length}</span></h2><p class="muted">Elige un grupo para ver sus estudiantes.</p></div><div class="groups">${groups.map(group => { const members = students.filter(student => student.group_name === group); const attention = members.filter(student => status(student) !== 'Vigente').length; return `<button class="group-card" data-group="${escape(group)}"><span class="group-icon">${escape(group.match(/\d+/)?.[0] || 'G')}</span><span><strong>${escape(group)}</strong><small>${members.length} estudiantes</small><em>${attention ? `${attention} requieren atención` : 'Todos al día'}</em></span><span class="arrow">›</span></button>`; }).join('')}</div></section>`;
+  const studentsView = `<section class="card workspace"><div class="section-head group-heading"><div><button id="back-groups" class="back">‹ Todos los grupos</button><h2>${escape(activeGroup)} <span class="count">${students.filter(student => student.group_name === activeGroup).length}</span></h2><p class="muted">Selecciona un estudiante para consultar o actualizar su carné.</p></div></div><div class="toolbar"><label class="search">Buscar<input id="search" type="search" placeholder="Nombre o cédula…" value="${escape(search)}"></label><label>Estado<select id="filter"><option value="">Todos</option>${labels.map(label => `<option ${filter === label ? 'selected' : ''}>${label}</option>`).join('')}</select></label><button id="refresh" class="secondary">Actualizar</button></div><div class="columns"><div id="students"></div><div id="detail"></div></div></section>`;
+  root.innerHTML = `${header()}<main><div class="heading"><div><div class="eyebrow">SECRETARÍA / ESTUDIANTES</div><h1>Carné del adolescente</h1><p>Estado y vencimiento de los ${students.length} estudiantes registrados.</p></div><button id="new-student">+ Estudiante</button></div>${demo ? '<div class="notice">Los cambios de esta demostración se pierden al salir o recargar. No ingreses datos reales.</div>' : ''}<div class="stats">${Object.entries(counts).filter(([, count]) => count || students.length === 0).map(([label, count]) => `<div class="card"><span>${label}</span><strong>${count}</strong><small>estudiantes</small></div>`).join('')}</div>${activeGroup ? studentsView : groupsView}<p id="message" class="message" role="status" aria-live="polite"></p><footer>Próximo a vencer: el carné vence durante los siguientes 30 días. La fecha registrada representa mes y año.</footer></main><dialog id="modal"></dialog>`;
   document.querySelector('#logout').onclick = event => action(event.target, async () => {
     if (!demo) { const { error } = await db.auth.signOut(); if (error) throw error; }
-    demo = false; session = null; students = []; selected = null; search = ''; filter = ''; login();
+    demo = false; session = null; students = []; selected = null; activeGroup = null; search = ''; filter = ''; login();
   });
   document.querySelector('#new-student').onclick = () => studentModal();
+  document.querySelectorAll('[data-group]').forEach(element => element.onclick = () => { activeGroup = element.dataset.group; selected = null; search = ''; filter = ''; render(); });
+  if (!activeGroup) return;
+  document.querySelector('#back-groups').onclick = () => { activeGroup = null; selected = null; search = ''; filter = ''; render(); };
   document.querySelector('#search').oninput = event => { search = event.target.value; list(); };
   document.querySelector('#filter').onchange = event => { filter = event.target.value; list(); };
   document.querySelector('#refresh').onclick = event => action(event.target, async () => { if (!demo) await load(); else render(); message('Información actualizada.'); });
@@ -82,7 +89,7 @@ function render() {
 
 function list() {
   const term = search.toLocaleLowerCase('es');
-  const visible = students.filter(student => `${student.full_name} ${student.document_number} ${student.group_name}`.toLocaleLowerCase('es').includes(term) && (!filter || status(student) === filter));
+  const visible = students.filter(student => student.group_name === activeGroup && `${student.full_name} ${student.document_number}`.toLocaleLowerCase('es').includes(term) && (!filter || status(student) === filter));
   document.querySelector('#students').innerHTML = visible.length ? visible.map(student => `<button class="student ${String(selected) === String(student.id) ? 'active' : ''}" data-id="${student.id}" aria-pressed="${String(selected) === String(student.id)}"><span class="avatar">${escape(student.full_name.charAt(0))}</span><span><strong>${escape(student.full_name)}</strong><small>${escape(student.group_name)} · Lista ${student.list_number}</small><span class="student-status">${status(student)}</span></span><span class="arrow">›</span></button>`).join('') : '<div class="empty">No hay estudiantes que coincidan.</div>';
   document.querySelectorAll('[data-id]').forEach(element => element.onclick = () => { selected = element.dataset.id; list(); detail(); });
 }
@@ -129,7 +136,7 @@ function studentModal(student) {
       if (error) throw new Error(error.code === '23505' ? 'La cédula o el número de lista ya están registrados.' : 'No se pudo guardar el estudiante.');
       row = data;
     } else row = { ...student, ...row, id: student?.id || crypto.randomUUID(), card_status: student?.card_status || 'unknown', card_expiry_month: student?.card_expiry_month || null, review_required: student?.review_required || false, notes: student?.notes || null };
-    students = students.filter(item => String(item.id) !== String(row.id)); students.push(row); selected = row.id;
+    students = students.filter(item => String(item.id) !== String(row.id)); students.push(row); selected = row.id; activeGroup = row.group_name;
   });
 }
 
@@ -142,6 +149,6 @@ if (db) {
     if (session) await load();
   } catch { message('No se pudo iniciar la aplicación.', true); }
   db.auth.onAuthStateChange(event => {
-    if (event === 'SIGNED_OUT' && !demo) { session = null; students = []; selected = null; login(); }
+    if (event === 'SIGNED_OUT' && !demo) { session = null; students = []; selected = null; activeGroup = null; login(); }
   });
 }
