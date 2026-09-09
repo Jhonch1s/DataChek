@@ -1031,3 +1031,13 @@ footer {
     max-height: 660px;
     overflow-y: auto
 }
+
+.expiry-fields {
+    display: flex;
+    gap: 10px;
+    flex: 1.6
+}
+
+.expiry-fields label {
+    flex: 1
+}
