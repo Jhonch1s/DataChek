@@ -6,9 +6,10 @@ const url = import.meta.env.VITE_SUPABASE_URL;
 const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 const db = url && key ? createClient(url, key) : null;
 const root = document.querySelector('#app');
-let demo = false, students = [], selected = null, activeGroup = null, search = '', filter = '', session = null;
+let demo = false, students = [], history = [], selected = null, activeGroup = null, view = 'groups', promotionYear = null, search = '', filter = '', session = null;
 
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const groupKey = student => JSON.stringify([student.academic_year, student.group_name]);
 const tone = value => value === 'Vigente' ? 'green' : value === 'Vencido' ? 'red' : value === 'Próximo a vencer' ? 'amber' : 'gray';
 const badge = value => `<span class="badge ${tone(value)}">${value}</span>`;
 const header = () => `<header><a class="brand" href="/">P<span>PORVENIR<small>Carné del adolescente</small></span></a><div class="account">${demo ? '<span class="demo">Demostración · datos ficticios</span>' : escape(session?.user.email || 'Espacio del equipo')} ${session || demo ? '<button id="logout" class="secondary">Salir</button>' : ''}</div></header>`;
@@ -47,8 +48,14 @@ function login() {
       { id: 'b', full_name: 'Mateo Rodríguez', document_number: '52345678', birth_date: '2013-03-22', group_name: '7.º 1E', group_code: '', list_number: 2, school_code: '1118', academic_year: 2026, card_status: 'no_card', card_expiry_month: null, review_required: false, notes: '' },
       { id: 'c', full_name: 'Valentina Silva', document_number: '53456789', birth_date: '2011-08-06', group_name: '9.º G. 1', group_code: '108434', list_number: 3, school_code: '1118', academic_year: 2026, card_status: 'unknown', card_expiry_month: null, review_required: true, notes: 'Confirmar con la familia.' },
     ];
+    students.forEach(student => { student.is_active = true; rememberGroup(student); });
     render();
   };
+}
+
+function rememberGroup(student) {
+  history = history.filter(item => !(String(item.student_id) === String(student.id) && item.academic_year === student.academic_year));
+  history.push({ student_id: student.id, academic_year: student.academic_year, group_name: student.group_name, group_code: student.group_code, list_number: student.list_number });
 }
 
 async function load() {
@@ -61,24 +68,51 @@ async function load() {
     if (data.length < 500) break;
   }
   students = rows;
+  history = [];
+  for (let from = 0; ; from += 500) {
+    const { data, error } = await db.from('student_group_history').select('*').order('academic_year', { ascending: false }).range(from, from + 499);
+    if (error) throw new Error('Falta ejecutar supabase/annual-management.sql en Supabase.');
+    history.push(...data);
+    if (data.length < 500) break;
+  }
   if (selected && !students.some(student => String(student.id) === String(selected))) selected = null;
-  if (activeGroup && !students.some(student => student.group_name === activeGroup)) activeGroup = null;
+  if (activeGroup && !students.some(student => student.is_active !== false && groupKey(student) === activeGroup)) activeGroup = null;
   render();
 }
 
 function render() {
   students.sort((a, b) => a.group_name.localeCompare(b.group_name, 'es') || a.list_number - b.list_number || a.full_name.localeCompare(b.full_name, 'es'));
+  const active = students.filter(student => student.is_active !== false);
   const labels = ['Sin confirmar', 'No tiene', 'Vigente', 'Próximo a vencer', 'Vencido', 'Revisar'];
-  const counts = Object.fromEntries(labels.map(label => [label, students.filter(student => status(student) === label).length]));
-  const groups = [...new Set(students.map(student => student.group_name))];
-  const groupsView = `<section class="card workspace"><div class="section-head"><h2>Grupos <span class="count">${groups.length}</span></h2><p class="muted">Elige un grupo para ver sus estudiantes.</p></div><div class="groups">${groups.map(group => { const members = students.filter(student => student.group_name === group); const attention = members.filter(student => status(student) !== 'Vigente').length; const overdue = members.filter(student => status(student) === 'Vencido').length; return `<button class="group-card ${overdue ? 'has-overdue' : attention ? 'has-attention' : 'all-current'}" data-group="${escape(group)}"><span class="group-icon">${escape(group.match(/\d+/)?.[0] || 'G')}</span><span><strong>${escape(group)}</strong><small>${members.length} estudiantes</small><em>${overdue ? `${overdue} vencidos` : attention ? `${attention} requieren atención` : 'Todos al día'}</em></span><span class="arrow">›</span></button>`; }).join('')}</div></section>`;
-  const studentsView = `<section class="card workspace"><div class="section-head group-heading"><div><button id="back-groups" class="back">‹ Todos los grupos</button><h2>${escape(activeGroup)} <span class="count">${students.filter(student => student.group_name === activeGroup).length}</span></h2><p class="muted">Selecciona un estudiante para consultar o actualizar su carné.</p></div></div><div class="toolbar"><label class="search">Buscar<input id="search" type="search" placeholder="Nombre o cédula…" value="${escape(search)}"></label><label>Estado<select id="filter"><option value="">Todos</option>${labels.map(label => `<option ${filter === label ? 'selected' : ''}>${label}</option>`).join('')}</select></label><button id="refresh" class="secondary">Actualizar</button></div><div class="columns"><div id="students"></div><div id="detail"></div></div></section>`;
-  root.innerHTML = `${header()}<main><div class="heading"><div><div class="eyebrow">SECRETARÍA / ESTUDIANTES</div><h1>Carné del adolescente</h1><p>Estado y vencimiento de los ${students.length} estudiantes registrados.</p></div><button id="new-student">+ Estudiante</button></div>${demo ? '<div class="notice">Los cambios de esta demostración se pierden al salir o recargar. No ingreses datos reales.</div>' : ''}<div class="stats">${Object.entries(counts).filter(([, count]) => count || students.length === 0).map(([label, count]) => `<div class="card ${tone(label)}"><span>${label}</span><strong>${count}</strong><small>estudiantes</small></div>`).join('')}</div>${activeGroup ? studentsView : groupsView}<p id="message" class="message" role="status" aria-live="polite"></p><footer>Próximo a vencer: el carné vence durante los siguientes 30 días. La fecha registrada representa mes y año.</footer></main><dialog id="modal"></dialog>`;
+  const counts = Object.fromEntries(labels.map(label => [label, active.filter(student => status(student) === label).length]));
+  const groups = [...new Set(active.map(groupKey))];
+  const groupsView = `<section class="card workspace"><div class="section-head"><h2>Grupos <span class="count">${groups.length}</span></h2><p class="muted">Elige un grupo para ver sus estudiantes.</p></div><div class="groups">${groups.map(key => { const [year, group] = JSON.parse(key); const members = active.filter(student => groupKey(student) === key); const attention = members.filter(student => status(student) !== 'Vigente').length; const overdue = members.filter(student => status(student) === 'Vencido').length; return `<button class="group-card ${overdue ? 'has-overdue' : attention ? 'has-attention' : 'all-current'}" data-group="${escape(key)}"><span class="group-icon">${escape(group.match(/\d+/)?.[0] || 'G')}</span><span><strong>${escape(group)}</strong><small>${year} · ${members.length} estudiantes</small><em>${overdue ? `${overdue} vencidos` : attention ? `${attention} requieren atención` : 'Todos al día'}</em></span><span class="arrow">›</span></button>`; }).join('')}</div></section>`;
+  const [activeYear, activeName] = activeGroup ? JSON.parse(activeGroup) : ['', ''];
+  const studentsView = `<section class="card workspace"><div class="section-head group-heading"><div><button id="back-groups" class="back">‹ Todos los grupos</button><h2>${escape(activeName)} · ${activeYear} <span class="count">${active.filter(student => groupKey(student) === activeGroup).length}</span></h2><p class="muted">Selecciona un estudiante para consultar o actualizar su carné.</p></div></div><div class="toolbar"><label class="search">Buscar<input id="search" type="search" placeholder="Nombre o cédula…" value="${escape(search)}"></label><label>Estado<select id="filter"><option value="">Todos</option>${labels.map(label => `<option ${filter === label ? 'selected' : ''}>${label}</option>`).join('')}</select></label><button id="refresh" class="secondary">Actualizar</button></div><div class="columns"><div id="students"></div><div id="detail"></div></div></section>`;
+  const managementView = `<section class="card workspace"><div class="section-head"><h2>Alta, baja y modificación</h2><p class="muted">La baja deja al estudiante inactivo y conserva su historial y carné.</p></div><div class="toolbar"><label class="search">Buscar por nombre o cédula<input id="manage-search" type="search" placeholder="Buscar estudiante…"></label></div><div class="management-list">${[...students].sort((a, b) => Number(b.is_active !== false) - Number(a.is_active !== false) || a.full_name.localeCompare(b.full_name, 'es')).map(student => { const past = history.filter(item => String(item.student_id) === String(student.id)).sort((a, b) => b.academic_year - a.academic_year).map(item => `${item.academic_year}: ${escape(item.group_name)}`).join(' · '); return `<div class="management-row" data-search="${escape(`${student.full_name} ${student.document_number}`.toLocaleLowerCase('es'))}"><div><strong>${escape(student.full_name)}</strong> ${student.is_active === false ? '<span class="badge gray">Inactivo</span>' : '<span class="badge green">Activo</span>'}<small>${escape(student.document_number)} · ${student.academic_year} · ${escape(student.group_name)} · Lista ${student.list_number}</small><small>Historial: ${past || 'Sin datos'}</small></div><div class="actions"><button class="secondary" data-edit-id="${student.id}">Editar</button><button class="secondary" data-toggle-id="${student.id}">${student.is_active === false ? 'Reactivar' : 'Dar de baja'}</button></div></div>`; }).join('')}</div></section>`;
+  const years = [...new Set(active.map(student => student.academic_year))].sort((a, b) => a - b);
+  if (!years.includes(promotionYear)) promotionYear = years[0] || new Date().getFullYear();
+  const sourceGroups = [...new Set(active.filter(student => student.academic_year === promotionYear).map(student => student.group_name))];
+  const promotionView = `<section class="card workspace"><div class="section-head"><h2>Pase de año</h2><p class="muted">Indica el grupo destino. Desmarca a quienes no pasan; quedarán en el año de origen para resolverlos por separado.</p><label>Año de origen<select id="promotion-year">${years.map(year => `<option ${year === promotionYear ? 'selected' : ''}>${year}</option>`).join('')}</select></label></div><div class="promotion-groups">${sourceGroups.map(group => { const members = active.filter(student => student.academic_year === promotionYear && student.group_name === group); return `<form class="promotion-card" data-source-group="${escape(group)}"><h3>${escape(group)} <span class="count">${members.length}</span></h3><p>Pase de ${promotionYear} a ${promotionYear + 1}</p><div class="promotion-fields"><label>Grupo destino<input name="target_group" maxlength="80" required placeholder="Ej.: 8.º G. 1"></label><label>Código destino (opcional)<input name="target_code" maxlength="30"></label></div><div class="promotion-members">${members.map(student => `<label class="check"><input type="checkbox" name="move" value="${student.id}" checked>${escape(student.full_name)}</label>`).join('')}</div><button>Avanzar estudiantes seleccionados</button></form>`; }).join('') || '<p class="empty">No hay estudiantes activos en este año.</p>'}</div></section>`;
+  const navigation = `<nav class="section-nav" aria-label="Secciones"><button data-view="groups" class="${view === 'groups' ? 'current' : 'secondary'}">Grupos</button><button data-view="management" class="${view === 'management' ? 'current' : 'secondary'}">Estudiantes</button><button data-view="promotion" class="${view === 'promotion' ? 'current' : 'secondary'}">Pase de año</button></nav>`;
+  root.innerHTML = `${header()}<main><div class="heading"><div><div class="eyebrow">SECRETARÍA / ESTUDIANTES</div><h1>Carné del adolescente</h1><p>Estado y vencimiento de los ${active.length} estudiantes activos.</p></div><button id="new-student">+ Estudiante</button></div>${demo ? '<div class="notice">Los cambios de esta demostración se pierden al salir o recargar. No ingreses datos reales.</div>' : ''}${navigation}<div class="stats">${Object.entries(counts).filter(([, count]) => count || active.length === 0).map(([label, count]) => `<div class="card ${tone(label)}"><span>${label}</span><strong>${count}</strong><small>estudiantes</small></div>`).join('')}</div>${view === 'management' ? managementView : view === 'promotion' ? promotionView : activeGroup ? studentsView : groupsView}<p id="message" class="message" role="status" aria-live="polite"></p><footer>Próximo a vencer: el carné vence durante los siguientes 30 días. La fecha registrada representa mes y año.</footer></main><dialog id="modal"></dialog>`;
   document.querySelector('#logout').onclick = event => action(event.target, async () => {
     if (!demo) { const { error } = await db.auth.signOut(); if (error) throw error; }
-    demo = false; session = null; students = []; selected = null; activeGroup = null; search = ''; filter = ''; login();
+    demo = false; session = null; students = []; history = []; selected = null; activeGroup = null; view = 'groups'; search = ''; filter = ''; login();
   });
   document.querySelector('#new-student').onclick = () => studentModal();
+  document.querySelectorAll('[data-view]').forEach(button => button.onclick = () => { view = button.dataset.view; activeGroup = null; selected = null; render(); });
+  if (view === 'management') {
+    document.querySelector('#manage-search').oninput = event => document.querySelectorAll('[data-search]').forEach(row => { row.hidden = !row.dataset.search.includes(event.target.value.toLocaleLowerCase('es')); });
+    document.querySelectorAll('[data-edit-id]').forEach(button => button.onclick = () => studentModal(students.find(student => String(student.id) === button.dataset.editId)));
+    document.querySelectorAll('[data-toggle-id]').forEach(button => button.onclick = () => toggleStudent(students.find(student => String(student.id) === button.dataset.toggleId), button));
+    return;
+  }
+  if (view === 'promotion') {
+    document.querySelector('#promotion-year').onchange = event => { promotionYear = Number(event.target.value); render(); };
+    document.querySelectorAll('[data-source-group]').forEach(form => form.onsubmit = event => promoteGroup(event, form));
+    return;
+  }
   document.querySelectorAll('[data-group]').forEach(element => element.onclick = () => { activeGroup = element.dataset.group; selected = null; search = ''; filter = ''; render(); });
   if (!activeGroup) return;
   document.querySelector('#back-groups').onclick = () => { activeGroup = null; selected = null; search = ''; filter = ''; render(); };
@@ -90,7 +124,7 @@ function render() {
 
 function list() {
   const term = search.toLocaleLowerCase('es');
-  const visible = students.filter(student => student.group_name === activeGroup && `${student.full_name} ${student.document_number}`.toLocaleLowerCase('es').includes(term) && (!filter || status(student) === filter));
+  const visible = students.filter(student => student.is_active !== false && groupKey(student) === activeGroup && `${student.full_name} ${student.document_number}`.toLocaleLowerCase('es').includes(term) && (!filter || status(student) === filter));
   document.querySelector('#students').innerHTML = visible.length ? visible.map(student => { const state = status(student); return `<button class="student ${tone(state)} ${String(selected) === String(student.id) ? 'active' : ''}" data-id="${student.id}" aria-pressed="${String(selected) === String(student.id)}"><span class="avatar">${escape(student.full_name.charAt(0))}</span><span><strong>${escape(student.full_name)}</strong><small>${escape(student.group_name)} · Lista ${student.list_number}</small>${badge(state)}</span><span class="arrow">›</span></button>`; }).join('') : '<div class="empty">No hay estudiantes que coincidan.</div>';
   document.querySelectorAll('[data-id]').forEach(element => element.onclick = () => { selected = element.dataset.id; list(); detail(); });
 }
@@ -120,6 +154,41 @@ function detail() {
   };
 }
 
+function toggleStudent(student, button) {
+  const activating = student.is_active === false;
+  if (!activating && !confirm(`¿Dar de baja a ${student.full_name}? Su historial y su carné se conservarán.`)) return;
+  action(button, async () => {
+    if (!demo) {
+      const { error } = await db.from('students').update({ is_active: activating }).eq('id', student.id);
+      if (error) throw new Error(activating ? 'No se pudo reactivar. Revisa si su número de lista ya está ocupado.' : 'No se pudo dar de baja.');
+    }
+    student.is_active = activating; render(); message(`${student.full_name}: ${activating ? 'activo' : 'inactivo'}.`);
+  });
+}
+
+function promoteGroup(event, form) {
+  event.preventDefault();
+  const members = students.filter(student => student.is_active !== false && student.academic_year === promotionYear && student.group_name === form.dataset.sourceGroup);
+  const selectedIds = [...form.querySelectorAll('input[name="move"]:checked')].map(input => input.value);
+  if (!selectedIds.length) { message('Selecciona al menos un estudiante para avanzar.', true); return; }
+  const target = form.elements.target_group.value.trim(), code = form.elements.target_code.value.trim();
+  if (!target) { form.elements.target_group.reportValidity(); return; }
+  if (!confirm(`¿Avanzar ${selectedIds.length} estudiantes de ${form.dataset.sourceGroup} (${promotionYear}) a ${target} (${promotionYear + 1})? ${members.length - selectedIds.length} quedarán en el año de origen.`)) return;
+  action(event.submitter, async () => {
+    if (!demo) {
+      const excluded = members.filter(student => !selectedIds.includes(String(student.id))).map(student => student.id);
+      const { error } = await db.rpc('advance_student_group', { source_year: promotionYear, source_group: form.dataset.sourceGroup, target_group: target, target_code: code || null, excluded_ids: excluded });
+      if (error) throw new Error('No se pudo completar el pase. Revisa el grupo destino y vuelve a intentarlo.');
+      await load();
+    } else {
+      let next = Math.max(0, ...students.filter(student => student.is_active !== false && student.academic_year === promotionYear + 1 && student.group_name === target).map(student => student.list_number));
+      members.filter(student => selectedIds.includes(String(student.id))).forEach(student => { student.academic_year++; student.group_name = target; student.group_code = code || null; student.list_number = ++next; rememberGroup(student); });
+      render();
+    }
+    message(`${selectedIds.length} estudiantes avanzaron a ${target}.`);
+  });
+}
+
 function modal(title, fields, save) {
   const dialog = document.querySelector('#modal');
   dialog.innerHTML = `<form><h2>${title}</h2>${fields}<p class="modal-error" role="alert"></p><div class="actions"><button type="button" class="secondary" id="cancel">Cancelar</button><button>Guardar</button></div></form>`;
@@ -134,8 +203,9 @@ function modal(title, fields, save) {
 }
 
 function studentModal(student) {
-  modal(student ? 'Editar estudiante' : 'Nuevo estudiante', `<label>Nombre completo<input name="full_name" required maxlength="150" value="${escape(student?.full_name || '')}"></label><label>Cédula<input name="document_number" inputmode="numeric" pattern="[0-9]{8}" required value="${escape(student?.document_number || '')}"></label><label>Fecha de nacimiento<input name="birth_date" type="date" required value="${escape(student?.birth_date || '')}"></label><label>Grupo<input name="group_name" required maxlength="80" placeholder="Ej.: 8.º G. 1" value="${escape(student?.group_name || '')}"></label><label>Código de grupo<input name="group_code" maxlength="30" value="${escape(student?.group_code || '')}"></label><label>N.º de lista<input name="list_number" type="number" min="1" max="99" required value="${escape(student?.list_number || '')}"></label>`, async form => {
-    let row = { school_code: student?.school_code || '1118', academic_year: student?.academic_year || 2026, full_name: form.get('full_name').trim(), document_number: form.get('document_number').trim(), birth_date: form.get('birth_date'), group_name: form.get('group_name').trim(), group_code: form.get('group_code').trim() || null, list_number: Number(form.get('list_number')) };
+  const defaultYear = Math.max(new Date().getFullYear(), ...students.filter(item => item.is_active !== false).map(item => item.academic_year));
+  modal(student ? 'Editar estudiante' : 'Nuevo estudiante', `<label>Nombre completo<input name="full_name" required maxlength="150" value="${escape(student?.full_name || '')}"></label><label>Cédula<input name="document_number" inputmode="numeric" pattern="[0-9]{8}" required value="${escape(student?.document_number || '')}"></label><label>Fecha de nacimiento<input name="birth_date" type="date" required value="${escape(student?.birth_date || '')}"></label><label>Año lectivo<input name="academic_year" type="number" min="2000" max="2100" required value="${student?.academic_year || defaultYear}"></label><label>Grupo<input name="group_name" required maxlength="80" placeholder="Ej.: 8.º G. 1" value="${escape(student?.group_name || '')}"></label><label>Código de grupo<input name="group_code" maxlength="30" value="${escape(student?.group_code || '')}"></label><label>N.º de lista<input name="list_number" type="number" min="1" max="999" required value="${escape(student?.list_number || '')}"></label>`, async form => {
+    let row = { school_code: student?.school_code || '1118', academic_year: Number(form.get('academic_year')), full_name: form.get('full_name').trim(), document_number: form.get('document_number').trim(), birth_date: form.get('birth_date'), group_name: form.get('group_name').trim(), group_code: form.get('group_code').trim() || null, list_number: Number(form.get('list_number')) };
     if (!/^\d{8}$/.test(row.document_number)) throw new Error('La cédula debe tener 8 dígitos.');
     if (!demo) {
       const query = student ? db.from('students').update(row).eq('id', student.id) : db.from('students').insert({ ...row, card_status: 'unknown' });
@@ -143,7 +213,8 @@ function studentModal(student) {
       if (error) throw new Error(error.code === '23505' ? 'La cédula o el número de lista ya están registrados.' : 'No se pudo guardar el estudiante.');
       row = data;
     } else row = { ...student, ...row, id: student?.id || crypto.randomUUID(), card_status: student?.card_status || 'unknown', card_expiry_month: student?.card_expiry_month || null, review_required: student?.review_required || false, notes: student?.notes || null };
-    students = students.filter(item => String(item.id) !== String(row.id)); students.push(row); selected = row.id; activeGroup = row.group_name;
+    students = students.filter(item => String(item.id) !== String(row.id)); students.push(row); rememberGroup(row);
+    if (view === 'groups') { selected = row.id; activeGroup = groupKey(row); }
   });
 }
 
@@ -154,8 +225,8 @@ if (db) {
     if (error) throw error;
     session = data.session;
     if (session) await load();
-  } catch { message('No se pudo iniciar la aplicación.', true); }
+  } catch (error) { message(error.message || 'No se pudo iniciar la aplicación.', true); }
   db.auth.onAuthStateChange(event => {
-    if (event === 'SIGNED_OUT' && !demo) { session = null; students = []; selected = null; activeGroup = null; login(); }
+    if (event === 'SIGNED_OUT' && !demo) { session = null; students = []; history = []; selected = null; activeGroup = null; view = 'groups'; login(); }
   });
 }

@@ -1,55 +1,22 @@
-# Porvenir · Documentación estudiantil
+# Porvenir · Carné del adolescente
 
-Primera versión: acceso del personal, alta y edición de estudiantes, búsqueda por nombre o grupo, tipos de documento compartidos, entrega y fecha de caducidad. Sin carga de archivos ni notificaciones.
+Aplicación para consultar el estado del carné, gestionar estudiantes y avanzar grupos al siguiente año lectivo. Netlify aloja el frontend y Supabase guarda los datos.
 
-## Probar en tu equipo
+## Base de datos existente
+
+La base inicial se creó con `supabase/setup.sql`. Ese archivo contiene datos estudiantiles y no se publica en Git. **No vuelvas a ejecutarlo.** Para habilitar bajas e historial, ejecuta una vez [supabase/annual-management.sql](supabase/annual-management.sql) en el SQL Editor de tu proyecto Supabase **antes de publicar esta versión**. La migración conserva los estudiantes y carnés existentes, registra su grupo actual como primer año del historial y no realiza pases automáticamente.
+
+La baja marca al estudiante como inactivo. El pase de año se hace por grupo: el personal indica el grupo destino y desmarca a quienes no avanzan. Los excluidos permanecen en su año de origen. El pase ocurre en una sola transacción por grupo; el historial del año anterior se conserva.
+
+## Desarrollo y publicación
 
 Requiere Node.js 22.12 o posterior.
 
 ```sh
 npm install
+npm test
+npm run build
 npm run dev
 ```
 
-Abre la dirección que muestra Vite y pulsa **Explorar demostración**. Son datos ficticios en memoria; al recargar se descartan. La demostración no escribe en Supabase.
-
-## Conectar Supabase
-
-1. Crea un proyecto y ejecuta `supabase/schema.sql` una sola vez en su SQL Editor.
-2. En Authentication, desactiva el registro público y crea las cuentas del personal con correo y contraseña, confirmando el correo desde la administración cuando corresponda.
-3. Autoriza cada cuenta desde el SQL Editor sustituyendo el UUID por el identificador de Authentication → Users:
-
-```sql
-insert into public.staff (user_id) values ('UUID-DEL-USUARIO');
-```
-
-4. Copia `.env.example` como `.env` y completa la URL del proyecto y la clave **publishable** (también sirve la antigua `anon`). Nunca uses `service_role` ni una clave secreta en el frontend.
-5. Reinicia `npm run dev` e ingresa con una cuenta autorizada.
-
-Todo el personal autorizado comparte lectura y edición. La tabla `staff` solo se administra desde Supabase; crear una cuenta por sí solo no concede acceso a estudiantes. Para retirar acceso, elimina su fila de `staff` desde el SQL Editor. RLS protege las tres tablas de datos.
-
-No se agregan documentos reales por defecto: crea los tipos que use la institución desde la web. Un tipo nuevo aparece pendiente para todos los estudiantes. Una entrega sin fecha se interpreta como documento sin caducidad. El vencimiento ocurre al día siguiente de la fecha indicada; el aviso visual incluye los siguientes 30 días. Se usa la fecha local del dispositivo.
-
-## Publicar en Netlify
-
-1. Sube este proyecto a tu repositorio y conéctalo a Netlify.
-2. Configura las variables `VITE_SUPABASE_URL` y `VITE_SUPABASE_PUBLISHABLE_KEY` en Netlify antes del deploy.
-3. `netlify.toml` define `npm run build` y la carpeta de publicación `dist`.
-4. Ejecuta el deploy. Si cambias variables, vuelve a desplegar.
-
-La aplicación no está publicada automáticamente y el SQL debe ejecutarse en tu proyecto. Sin las variables se muestra el acceso a la demostración.
-
-## Verificación
-
-```sh
-npm test
-npm run build
-```
-
-La prueba cubre documentos pendientes, sin caducidad, vencidos y los límites de 0, 30 y 31 días con cambio de año.
-
-Antes de usar datos reales, comprueba con Supabase conectado: una cuenta autorizada guarda y ve los cambios después de recargar; otra cuenta autorizada ve esos cambios; una cuenta sin fila en `staff` y una petición anónima no acceden a datos. No se han ejecutado esas comprobaciones contra una instancia real desde este proyecto.
-
-Si dos personas guardan el mismo documento, prevalece la última escritura. El botón Actualizar trae los cambios del equipo; esta versión no tiene sincronización en vivo ni historial.
-
-Referencias: [acceso con contraseña](https://supabase.com/docs/reference/javascript/auth-signinwithpassword), [políticas RLS](https://supabase.com/docs/guides/database/postgres/row-level-security), [compilación en Netlify](https://docs.netlify.com/build/configure-builds/overview/).
+La demostración usa datos ficticios en memoria. Para conectar Supabase, configura `VITE_SUPABASE_URL` y `VITE_SUPABASE_PUBLISHABLE_KEY` en `.env` y en Netlify. Nunca coloques una clave secreta en el frontend. Un push a la rama conectada a Netlify publica el build definido en `netlify.toml`.
